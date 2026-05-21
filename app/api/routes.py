@@ -2,9 +2,10 @@
 FastAPI HTTP routes.
 
 Endpoints:
-  POST   /api/v1/parse    Parse a résumé file (Module 1)
-  POST   /api/v1/match    Match a parsed résumé against a job description (Module 2)
-  GET    /health          Liveness check
+  POST  /api/v1/parse    Parse a résumé file (Module 1)
+  POST  /api/v1/match    Match a parsed résumé against a job description (Module 2)
+  POST  /api/v1/tailor   Tailor a parsed résumé for a job description (Module 3)
+  GET   /health          Liveness check
 """
 from __future__ import annotations
 
@@ -21,8 +22,10 @@ from app.core.exceptions import (
 )
 from app.models.match import MatchRequest, MatchResult
 from app.models.resume import ParsedResume
+from app.models.tailor import TailorRequest, TailorResult
 from app.services.matcher_service import MatcherService
 from app.services.parser_service import ResumeParserService
+from app.services.tailor_service import TailorService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,10 +33,11 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-# Singletons per process — both services have internal state (caches, LLM
-# clients) and benefit from being reused across requests.
+# ----- Singletons per process (reuse caches and LLM clients) -----
+
 _parser_singleton: ResumeParserService | None = None
 _matcher_singleton: MatcherService | None = None
+_tailor_singleton: TailorService | None = None
 
 
 def get_parser(settings: Settings = Depends(get_settings)) -> ResumeParserService:
@@ -50,12 +54,18 @@ def get_matcher(settings: Settings = Depends(get_settings)) -> MatcherService:
     return _matcher_singleton
 
 
+def get_tailor(settings: Settings = Depends(get_settings)) -> TailorService:
+    global _tailor_singleton
+    if _tailor_singleton is None:
+        _tailor_singleton = TailorService(settings=settings)
+    return _tailor_singleton
+
+
 # ----- Health -----
 
 
 @router.get("/health", tags=["health"])
 async def health() -> dict[str, str]:
-    """Liveness check used by load balancers and uptime monitors."""
     return {"status": "ok"}
 
 
@@ -68,15 +78,8 @@ async def health() -> dict[str, str]:
     tags=["parser"],
     summary="Parse a résumé",
     description=(
-        "Upload a PDF or DOCX résumé and receive structured JSON in return. "
-        "The response contains personal info, skills, work experience, "
-        "education, projects, and certifications."
+        "Upload a PDF or DOCX résumé and receive structured JSON in return."
     ),
-    responses={
-        400: {"description": "Invalid file (unsupported type, too large, empty)"},
-        422: {"description": "File could not be parsed (corrupt or unreadable)"},
-        500: {"description": "Internal error (LLM failure, unexpected exception)"},
-    },
 )
 async def parse_resume(
     file: UploadFile = File(..., description="Résumé file (PDF or DOCX, max 10 MB)"),
@@ -106,10 +109,7 @@ async def parse_resume(
         raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.exception("Unexpected parser error", extra={"upload_filename": file.filename})
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred. Check server logs.",
-        ) from e
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 # ----- Module 2: Match -----
@@ -120,17 +120,6 @@ async def parse_resume(
     response_model=MatchResult,
     tags=["matcher"],
     summary="Match a parsed résumé against a job description",
-    description=(
-        "Takes a parsed résumé (the output of /api/v1/parse) plus a job "
-        "description and returns a 0–100 match score with breakdowns: "
-        "semantic similarity, requirement coverage, matched and missing skills, "
-        "and a short narrative summary."
-    ),
-    responses={
-        400: {"description": "Invalid input (missing fields, JD too short)"},
-        502: {"description": "LLM or embedding API failed"},
-        500: {"description": "Internal error"},
-    },
 )
 async def match_resume_to_job(
     request: MatchRequest,
@@ -143,7 +132,38 @@ async def match_resume_to_job(
         raise HTTPException(status_code=502, detail=f"LLM/embedding call failed: {e}") from e
     except Exception as e:
         logger.exception("Unexpected matcher error")
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred. Check server logs.",
-        ) from e
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
+
+
+# ----- Module 3: Tailor -----
+
+
+@router.post(
+    "/api/v1/tailor",
+    response_model=TailorResult,
+    tags=["tailor"],
+    summary="Tailor a parsed résumé for a specific job description",
+    description=(
+        "Takes a parsed résumé and a job description, returns a tailored version "
+        "of the résumé along with a structured diff (what changed) and an ATS "
+        "compatibility report. The LLM is source-bound: it may rewrite, reorder, "
+        "and emphasise existing content but never invent new information."
+    ),
+    responses={
+        400: {"description": "Invalid input"},
+        502: {"description": "LLM call failed"},
+        500: {"description": "Internal error"},
+    },
+)
+async def tailor_resume_for_job(
+    request: TailorRequest,
+    tailor: TailorService = Depends(get_tailor),
+) -> TailorResult:
+    try:
+        return tailor.tailor(request)
+    except LLMExtractionError as e:
+        logger.exception("Tailor LLM call failed")
+        raise HTTPException(status_code=502, detail=f"LLM call failed: {e}") from e
+    except Exception as e:
+        logger.exception("Unexpected tailor error")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e

@@ -30,7 +30,9 @@ USER appuser
 
 EXPOSE 7860
 
+# HEALTHCHECK gives the platform a way to know if the container is healthy
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
 
+# Render and most PaaS providers inject PORT; honor it
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 2"]

@@ -11,14 +11,14 @@ This is where text becomes structured data. The flow is:
   5. On validation failure, retry up to LLM_MAX_RETRIES with a corrective
      follow-up message.
 
-We support both Anthropic and OpenAI behind a tiny abstract interface so the
-caller never needs to know which provider is in use. Anthropic is the
-recommended default — Claude Haiku 4.5 is fast, cheap, and accurate for this
-task.
+We support Anthropic, OpenAI, and Google Gemini behind a tiny abstract
+interface so the caller never needs to know which provider is in use.
+Provider switching is a single env var change.
 
-IMPORTANT: We use the providers' "force JSON" features (tool use for
-Anthropic, response_format=json_object for OpenAI). This dramatically reduces
-malformed-JSON errors.
+IMPORTANT: We use the providers' "force JSON" features:
+  - Anthropic: tool-use with input_schema
+  - OpenAI: response_format=json_object
+  - Gemini: response_mime_type=json + schema in prompt
 """
 from __future__ import annotations
 
@@ -178,12 +178,20 @@ class GeminiProvider(LLMProvider):
     """
     Google Gemini provider.
 
-    We use a prompt-based JSON approach instead of Gemini's response_schema
-    because Gemini's structured-output schema is based on OpenAPI 3.0 and
-    rejects many JSON Schema features Pydantic emits (anyOf, $ref, etc.).
-    Rather than fighting the schema translation, we ask Gemini to return
-    JSON via response_mime_type and validate the output ourselves with
-    Pydantic on our side. This is more reliable in production.
+    Why Gemini: it has a generous free tier (1,000 requests/day on
+    gemini-2.5-flash-lite, no credit card required), making it ideal for
+    development and small-scale production.
+
+    Implementation note: we use a prompt-based JSON approach instead of
+    Gemini's response_schema parameter, because Gemini's structured-output
+    schema is based on OpenAPI 3.0 and rejects many JSON Schema features
+    Pydantic emits (anyOf for Optional, $ref, etc.). Rather than fighting
+    that translation, we describe the schema in the system prompt and use
+    response_mime_type=application/json to force JSON — then validate with
+    Pydantic on our side. More portable and more robust.
+
+    To swap to Anthropic or OpenAI later, just change LLM_PROVIDER in .env —
+    no code changes needed.
     """
 
     def __init__(self, settings: Settings):
@@ -204,8 +212,8 @@ class GeminiProvider(LLMProvider):
         self.timeout = settings.llm_timeout_seconds
 
     def complete_json(self, system: str, user: str, schema: dict[str, Any]) -> str:
-        # We include the schema directly in the prompt as guidance.
-        # Pydantic validates the response on our side after the call.
+        # Schema goes into the system instruction; we ask for JSON and let
+        # Pydantic validate after.
         full_system = (
             f"{system}\n\n"
             f"Return JSON that matches this structure:\n"
@@ -219,7 +227,7 @@ class GeminiProvider(LLMProvider):
             generation_config={
                 "response_mime_type": "application/json",
                 "max_output_tokens": 8192,
-                "temperature": 0.1,
+                "temperature": 0.1,  # Low temperature for consistent extraction
             },
         )
 
@@ -228,40 +236,6 @@ class GeminiProvider(LLMProvider):
             request_options={"timeout": self.timeout},
         )
         return response.text or ""
-
-    @staticmethod
-    def _clean_schema_for_gemini(schema: dict[str, Any]) -> dict[str, Any]:
-        """
-        Gemini's response_schema doesn't accept all JSON Schema features
-        Pydantic emits ($defs, $ref, title, additionalProperties, etc.).
-        We resolve $refs inline and strip unsupported keys.
-        """
-        # First, resolve all $refs by inlining the definitions
-        defs = schema.get("$defs", {})
-
-        def resolve(node: Any) -> Any:
-            if isinstance(node, dict):
-                # If this node is a $ref, replace it with the referenced def
-                if "$ref" in node:
-                    ref_path = node["$ref"]
-                    # e.g. "#/$defs/PersonalInfo" -> "PersonalInfo"
-                    name = ref_path.split("/")[-1]
-                    if name in defs:
-                        return resolve(defs[name])
-                    return {}
-                # Otherwise, recurse into each value
-                cleaned = {}
-                for k, v in node.items():
-                    # Drop unsupported keys
-                    if k in {"$defs", "title", "additionalProperties", "default"}:
-                        continue
-                    cleaned[k] = resolve(v)
-                return cleaned
-            if isinstance(node, list):
-                return [resolve(item) for item in node]
-            return node
-
-        return resolve(schema)
 
 
 # ---------- The main extractor ----------

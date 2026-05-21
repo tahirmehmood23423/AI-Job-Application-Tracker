@@ -14,18 +14,41 @@ from app.models.match import (
     MatchedRequirement,
     Requirement,
 )
+from app.models.tailor import (
+    ATSIssue,
+    ATSReport,
+    Change,
+    ChangeImpact,
+    ChangeType,
+    RewrittenResume,
+    TailorMode,
+    TailorRequest,
+    TailorResult,
+)
 
 __all__ = [
+    # resume
     "CertificationEntry",
     "EducationEntry",
     "ExperienceEntry",
     "LLMExtractionResult",
-    "MatchRequest",
-    "MatchResult",
-    "MatchedRequirement",
     "ParsedResume",
     "PersonalInfo",
     "ProjectEntry",
-    "Requirement",
     "Skills",
+    # match
+    "MatchRequest",
+    "MatchResult",
+    "MatchedRequirement",
+    "Requirement",
+    # tailor
+    "ATSIssue",
+    "ATSReport",
+    "Change",
+    "ChangeImpact",
+    "ChangeType",
+    "RewrittenResume",
+    "TailorMode",
+    "TailorRequest",
+    "TailorResult",
 ]

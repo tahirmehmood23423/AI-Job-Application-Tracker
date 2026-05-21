@@ -63,6 +63,8 @@ class TextExtractor:
                 f"Unsupported file type '{ext}'. Allowed: {sorted(SUPPORTED_EXTENSIONS)}"
             )
 
+        # NOTE: we use 'upload_filename' as the log key because Python's
+        # built-in logging module reserves 'filename' as a LogRecord attribute.
         logger.info(
             "Extracting text from file",
             extra={"upload_filename": filename, "extension": ext, "size_bytes": len(file_bytes)},
