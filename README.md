@@ -1,3 +1,12 @@
+---
+title: Resume Parser API
+emoji: 📄
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
 # Resume Parser API
 
 > **Module 1 of the AI Job Application Tracker** — extracts structured data from resume PDFs and DOCX files using a hybrid approach: deterministic parsing for reliable fields + LLM extraction for messy free-form sections.
