@@ -10,7 +10,9 @@ from app.services.rewrite_service import RewriteService
 from app.services.segmenter import Segmenter
 from app.services.tailor_service import TailorService
 from app.services.text_extractor import TextExtractor
-
+from app.services.talking_point_extractor import TalkingPointExtractor
+from app.services.cover_letter_writer import CoverLetterWriter
+from app.services.cover_letter_service import CoverLetterService
 __all__ = [
     "ATSChecker",
     "DiffService",
@@ -26,4 +28,7 @@ __all__ = [
     "TextExtractor",
     "cosine_similarity",
     "resume_to_text",
+    "TalkingPointExtractor",
+    "CoverLetterWriter",
+    "CoverLetterService"
 ]
