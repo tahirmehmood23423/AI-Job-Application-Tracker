@@ -6,24 +6,27 @@ Returns the complete CoverLetterResult.
 Mirrors MatcherService from Module 2 — single responsibility: orchestrate and combine.
 """
 
-import logging
+from __future__ import annotations
 
+from app.config import Settings, get_settings
 from app.models.cover_letter import CoverLetterRequest, CoverLetterResult
-from app.services.talking_point_extractor import TalkingPointExtractor
 from app.services.cover_letter_writer import CoverLetterWriter
+from app.services.talking_point_extractor import TalkingPointExtractor
+from app.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CoverLetterService:
     """
     Singleton orchestrator. Holds one instance of each pass service.
-    FastAPI wires this up via Depends() in the route handler.
+    FastAPI wires this up via Depends() in routes.py.
     """
 
-    def __init__(self):
-        self.extractor = TalkingPointExtractor()
-        self.writer = CoverLetterWriter()
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+        self.extractor = TalkingPointExtractor(settings=self.settings)
+        self.writer = CoverLetterWriter(settings=self.settings)
         logger.info("CoverLetterService initialised (extractor + writer ready)")
 
     def generate(self, request: CoverLetterRequest) -> CoverLetterResult:
@@ -56,7 +59,10 @@ class CoverLetterService:
         # Extract match score if provided
         match_score = None
         if request.match_result:
-            match_score = request.match_result.get("score")
+            # Support both "overall_score" (Module 2 schema) and "score" (generic)
+            match_score = request.match_result.get(
+                "overall_score", request.match_result.get("score")
+            )
             if match_score is not None:
                 try:
                     match_score = float(match_score)

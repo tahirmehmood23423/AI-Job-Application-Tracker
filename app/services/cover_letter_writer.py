@@ -7,14 +7,15 @@ Design: One LLM call. Higher temperature than Pass 1 (creative writing, not extr
 Source-bound: the writer is instructed to use only the provided talking points.
 """
 
-import logging
-import os
+from __future__ import annotations
 
 import google.generativeai as genai
 
+from app.config import Settings, get_settings
 from app.models.cover_letter import TalkingPoints, TonePreference
+from app.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Tone instruction fragments injected into the writer prompt
 TONE_INSTRUCTIONS = {
@@ -62,13 +63,20 @@ class CoverLetterWriter:
     One LLM call: talking points + tone + context → complete cover letter.
     """
 
-    def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
-        genai.configure(api_key=api_key)
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+
+        if not self.settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not set in settings")
+
+        genai.configure(api_key=self.settings.gemini_api_key)
+
+        # Mirror GeminiProvider: accept model name with or without "models/" prefix
+        model = self.settings.gemini_model
+        model_name = model if model.startswith("models/") else f"models/{model}"
+
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash-lite",
+            model_name=model_name,
             system_instruction=WRITER_SYSTEM_PROMPT,
         )
 
@@ -85,9 +93,8 @@ class CoverLetterWriter:
         """
         tone_instruction = TONE_INSTRUCTIONS[tone]
 
-        # Build the talking points block for the prompt
         tp_lines = [
-            f"Strongest experiences (use verbatim from résumé):",
+            "Strongest experiences (use verbatim from résumé):",
             *[f"  - {exp}" for exp in talking_points.strongest_experiences],
             f"\nMatched skills: {', '.join(talking_points.matched_skills)}",
             f"\nStandout achievement: {talking_points.standout_achievement}",
@@ -121,7 +128,7 @@ Write the complete cover letter now."""
         response = self.model.generate_content(
             user_message,
             generation_config=genai.GenerationConfig(
-                temperature=0.7,  # Higher than Pass 1 — this is creative writing
+                temperature=0.7,
             ),
         )
 

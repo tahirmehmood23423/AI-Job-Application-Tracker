@@ -7,17 +7,19 @@ Design: One LLM call. Schema goes in the system prompt (same pattern as Module 3
 to avoid Gemini's response_schema rejecting Pydantic's anyOf).
 """
 
+from __future__ import annotations
+
 import json
-import logging
-import os
 import re
 from typing import Optional
 
 import google.generativeai as genai
 
+from app.config import Settings, get_settings
 from app.models.cover_letter import TalkingPoints
+from app.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _resume_to_text(resume: dict) -> str:
@@ -45,9 +47,10 @@ def _resume_to_text(resume: dict) -> str:
         for job in experience:
             title = job.get("title", "")
             company = job.get("company", "")
-            dates = job.get("dates", "")
-            exp_lines.append(f"  {title} at {company} ({dates})")
-            for bullet in job.get("bullets", []):
+            start = job.get("start_date", "")
+            end = job.get("end_date", "")
+            exp_lines.append(f"  {title} at {company} ({start} — {end})")
+            for bullet in job.get("responsibilities", []):
                 exp_lines.append(f"    - {bullet}")
         parts.append("\n".join(exp_lines))
 
@@ -55,8 +58,10 @@ def _resume_to_text(resume: dict) -> str:
         proj_lines = ["PROJECTS:"]
         for proj in projects:
             name = proj.get("name", "")
-            desc = proj.get("description", "")
-            proj_lines.append(f"  {name}: {desc}")
+            desc = proj.get("description") or ""
+            techs = proj.get("technologies", [])
+            tech_str = f" [{', '.join(techs)}]" if techs else ""
+            proj_lines.append(f"  {name}{tech_str}: {desc}")
         parts.append("\n".join(proj_lines))
 
     if education := resume.get("education"):
@@ -64,12 +69,18 @@ def _resume_to_text(resume: dict) -> str:
         for edu in education:
             degree = edu.get("degree", "")
             institution = edu.get("institution", "")
-            year = edu.get("year", "")
-            edu_lines.append(f"  {degree} — {institution} ({year})")
+            start = edu.get("start_date", "")
+            end = edu.get("end_date", "")
+            edu_lines.append(f"  {degree} — {institution} ({start}–{end})")
         parts.append("\n".join(edu_lines))
 
     if certs := resume.get("certifications"):
-        parts.append(f"CERTIFICATIONS:\n" + "\n".join(f"  - {c}" for c in certs))
+        cert_lines = ["CERTIFICATIONS:"]
+        for c in certs:
+            name = c.get("name", "") if isinstance(c, dict) else c
+            issuer = c.get("issuer", "") if isinstance(c, dict) else ""
+            cert_lines.append(f"  - {name}{' · ' + issuer if issuer else ''}")
+        parts.append("\n".join(cert_lines))
 
     return "\n\n".join(parts)
 
@@ -82,7 +93,7 @@ def _match_summary(match_result: Optional[dict]) -> str:
     if not match_result:
         return "No match result provided."
 
-    score = match_result.get("score", "N/A")
+    score = match_result.get("overall_score", match_result.get("score", "N/A"))
     verdict = match_result.get("verdict", "")
     matched_skills = match_result.get("matched_skills", [])
     missing_skills = match_result.get("missing_skills", [])
@@ -125,13 +136,20 @@ class TalkingPointExtractor:
     One LLM call: résumé + JD + match signals → structured talking points.
     """
 
-    def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
-        genai.configure(api_key=api_key)
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+
+        if not self.settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not set in settings")
+
+        genai.configure(api_key=self.settings.gemini_api_key)
+
+        # Mirror GeminiProvider: accept model name with or without "models/" prefix
+        model = self.settings.gemini_model
+        model_name = model if model.startswith("models/") else f"models/{model}"
+
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash-lite",
+            model_name=model_name,
             system_instruction=EXTRACTION_SYSTEM_PROMPT,
         )
 
@@ -165,7 +183,7 @@ Extract the strongest talking points for a cover letter targeting this specific 
             user_message,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
-                temperature=0.2,  # Low temperature — extraction should be factual
+                temperature=0.2,
             ),
         )
 
@@ -181,7 +199,6 @@ Extract the strongest talking points for a cover letter targeting this specific 
             logger.error(f"TalkingPointExtractor: JSON parse failed: {e}\nRaw: {raw[:500]}")
             raise ValueError(f"LLM returned invalid JSON: {e}") from e
 
-        # Validate with Pydantic
         try:
             talking_points = TalkingPoints(**data)
         except Exception as e:
