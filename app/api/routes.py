@@ -2,11 +2,13 @@
 FastAPI HTTP routes.
 
 Endpoints:
-  POST  /api/v1/parse    Parse a résumé file (Module 1)
-  POST  /api/v1/match    Match a parsed résumé against a job description (Module 2)
-  POST  /api/v1/tailor   Tailor a parsed résumé for a job description (Module 3)
-  GET   /health          Liveness check
+  POST  /api/v1/parse          Parse a résumé file (Module 1)
+  POST  /api/v1/match          Match a parsed résumé against a job description (Module 2)
+  POST  /api/v1/tailor         Tailor a parsed résumé for a job description (Module 3)
+  POST  /api/v1/cover-letter   Generate a cover letter (Module 4)
+  GET   /health                Liveness check
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -20,9 +22,11 @@ from app.core.exceptions import (
     TextExtractionError,
     UnsupportedFileTypeError,
 )
+from app.models.cover_letter import CoverLetterRequest, CoverLetterResult
 from app.models.match import MatchRequest, MatchResult
 from app.models.resume import ParsedResume
 from app.models.tailor import TailorRequest, TailorResult
+from app.services.cover_letter_service import CoverLetterService
 from app.services.matcher_service import MatcherService
 from app.services.parser_service import ResumeParserService
 from app.services.tailor_service import TailorService
@@ -38,6 +42,7 @@ router = APIRouter()
 _parser_singleton: ResumeParserService | None = None
 _matcher_singleton: MatcherService | None = None
 _tailor_singleton: TailorService | None = None
+_cover_letter_singleton: CoverLetterService | None = None
 
 
 def get_parser(settings: Settings = Depends(get_settings)) -> ResumeParserService:
@@ -59,6 +64,13 @@ def get_tailor(settings: Settings = Depends(get_settings)) -> TailorService:
     if _tailor_singleton is None:
         _tailor_singleton = TailorService(settings=settings)
     return _tailor_singleton
+
+
+def get_cover_letter_service() -> CoverLetterService:
+    global _cover_letter_singleton
+    if _cover_letter_singleton is None:
+        _cover_letter_singleton = CoverLetterService()
+    return _cover_letter_singleton
 
 
 # ----- Health -----
@@ -166,4 +178,40 @@ async def tailor_resume_for_job(
         raise HTTPException(status_code=502, detail=f"LLM call failed: {e}") from e
     except Exception as e:
         logger.exception("Unexpected tailor error")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
+
+
+# ----- Module 4: Cover Letter -----
+
+
+@router.post(
+    "/api/v1/cover-letter",
+    response_model=CoverLetterResult,
+    tags=["cover-letter"],
+    summary="Generate a tailored cover letter",
+    description=(
+        "Two-pass cover letter generator. Pass 1 extracts the strongest talking "
+        "points from the résumé, job description, and optional match result. "
+        "Pass 2 writes a structured 4-paragraph letter in the chosen tone. "
+        "Source-bound: nothing is invented beyond what is in the résumé."
+    ),
+    responses={
+        422: {"description": "LLM returned invalid output"},
+        502: {"description": "LLM call failed"},
+        500: {"description": "Internal error"},
+    },
+)
+async def generate_cover_letter(
+    request: CoverLetterRequest,
+    service: CoverLetterService = Depends(get_cover_letter_service),
+) -> CoverLetterResult:
+    try:
+        return service.generate(request)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except LLMExtractionError as e:
+        logger.exception("Cover letter LLM call failed")
+        raise HTTPException(status_code=502, detail=f"LLM call failed: {e}") from e
+    except Exception as e:
+        logger.exception("Unexpected cover letter error")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
