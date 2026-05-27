@@ -116,7 +116,7 @@ class StatusEvent(Base):
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def create_db(db_url: str = "sqlite:///./dashboard.db"):
+def create_db(db_url: str = "sqlite:////tmp/dashboard.db"):
     """Create engine + all tables. Call once at startup."""
     engine = create_engine(
         db_url,
