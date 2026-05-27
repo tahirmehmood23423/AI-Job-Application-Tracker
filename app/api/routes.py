@@ -31,6 +31,8 @@ from app.services.matcher_service import MatcherService
 from app.services.parser_service import ResumeParserService
 from app.services.tailor_service import TailorService
 from app.utils.logger import get_logger
+from app.models.job import JobSearchRequest, JobSearchResult
+from app.services.job_discovery_service import JobDiscoveryService
 
 logger = get_logger(__name__)
 
@@ -71,6 +73,17 @@ def get_cover_letter_service() -> CoverLetterService:
     if _cover_letter_singleton is None:
         _cover_letter_singleton = CoverLetterService()
     return _cover_letter_singleton
+
+_job_discovery_singleton: JobDiscoveryService | None = None
+
+
+def get_job_discovery_service(
+    settings: Settings = Depends(get_settings),
+) -> JobDiscoveryService:
+    global _job_discovery_singleton
+    if _job_discovery_singleton is None:
+        _job_discovery_singleton = JobDiscoveryService(settings=settings)
+    return _job_discovery_singleton
 
 
 # ----- Health -----
@@ -215,3 +228,30 @@ async def generate_cover_letter(
     except Exception as e:
         logger.exception("Unexpected cover letter error")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
+    
+@router.post(
+    "/api/v1/jobs/discover",
+    response_model=JobSearchResult,
+    tags=["jobs"],
+    summary="Discover jobs matching your résumé",
+    description=(
+        "Auto-extracts keywords from your parsed résumé, queries LinkedIn RSS, "
+        "Indeed RSS, and Remotive API concurrently, deduplicates results, "
+        "and scores each job against your résumé. Returns sorted by match score."
+    ),
+    responses={
+        500: {"description": "Internal error"},
+    },
+)
+async def discover_jobs(
+    request: JobSearchRequest,
+    service: JobDiscoveryService = Depends(get_job_discovery_service),
+) -> JobSearchResult:
+    try:
+        return service.discover(request)
+    except Exception as e:
+        logger.exception("Unexpected job discovery error")
+        raise HTTPException(
+            status_code=500,
+            detail="Job discovery failed. Please try again."
+        ) from e
