@@ -16,6 +16,7 @@ from app import __version__
 from app.api import router
 from app.config import get_settings
 from app.utils.logger import configure_logging, get_logger
+from app.module6.router import router as dashboard_router
 
 
 @asynccontextmanager
@@ -26,7 +27,6 @@ async def lifespan(app: FastAPI):
 
     settings = get_settings()
 
-    # Fail fast if the LLM provider isn't configured
     try:
         settings.validate_llm_credentials()
     except ValueError as e:
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(dashboard_router)  # ← Module 6
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:
